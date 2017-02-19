@@ -19,11 +19,11 @@ namespace AsyncTimer
         static void Main(string[] args)
         {
             cancellationTokenSource = new CancellationTokenSource();
-            cancellationTokenSource.CancelAfter(TimeSpan.FromSeconds(10));
+            cancellationTokenSource.CancelAfter(TimeSpan.FromSeconds(100));
             token = cancellationTokenSource.Token;
-            Timer timer = new Timer(10);
+            Timer timer = new Timer(1);
             timer.AutoReset = true;
-            queue = new BroadcastBlock<DateTime>( (s) => { return s; }, new DataflowBlockOptions { BoundedCapacity = 5, });
+            queue = new BroadcastBlock<DateTime>((f) => { return f; }, new DataflowBlockOptions {  MaxMessagesPerTask= 100, BoundedCapacity = 1, CancellationToken = token,});
 
 
             try
@@ -37,30 +37,43 @@ namespace AsyncTimer
                     await queue.SendAsync<DateTime>(e.SignalTime);
                     //queue.Complete();
                 };
-                  var consumerOptions = new ExecutionDataflowBlockOptions { BoundedCapacity = 1, };
-
-                  var consumer1 = new ActionBlock<DateTime>((date) => { Console.WriteLine($"consumer 1: Date: { date:hh:mm:ss:fff}"); } , consumerOptions);
-                  var consumer2 = new ActionBlock<DateTime>((date) => { Console.WriteLine($"consumer 2: Date: { date:hh:mm:ss:fff}"); } , consumerOptions);
-                  var consumer3 = new ActionBlock<DateTime>((date) => { Console.WriteLine($"consumer 3: Date: { date:hh:mm:ss:fff}"); } , consumerOptions);
-                  var consumer4 = new ActionBlock<DateTime>((date) => { Console.WriteLine($"consumer 4: Date: { date:hh:mm:ss:fff}"); } , consumerOptions);
-                  // Start the producer and consumer.
-
+                  var consumerOptions = new ExecutionDataflowBlockOptions { BoundedCapacity = 1, MaxDegreeOfParallelism = Environment.ProcessorCount };
                   var linkOptions = new DataflowLinkOptions { PropagateCompletion = true, };
-                  queue.LinkTo(consumer1, linkOptions);
-                  queue.LinkTo(consumer2, linkOptions);
-                  queue.LinkTo(consumer3, linkOptions);
-                  queue.LinkTo(consumer4, linkOptions);
+
+
+                  List<ActionBlock<DateTime>> actionblocks = new List<ActionBlock<DateTime>>();
+               
+
+
+
+
+                  for (int i = 0; i < 100; i++)
+                  {
+                      var currentNumber = i;
+                      var consumer1 = new ActionBlock<DateTime>((date) => { Console.WriteLine($"consumer {currentNumber}: Date: { date:hh:mm:ss:ffff}"); }, consumerOptions);
+
+                      actionblocks.Add(consumer1);
+
+                      queue.LinkTo(consumer1, linkOptions);
+
+                  }
+
 
 
                   // Wait for everything to complete.
                   try
                   {
+                      List<Task> tasks = actionblocks.Select(s => s.Completion).ToList();
 
-                      await Task.WhenAny(queue.Completion, consumer1.Completion, consumer2.Completion, consumer3.Completion, consumer4.Completion, Task.Delay(TimeSpan.FromMilliseconds(-1),token));
+                      tasks.Add(queue.Completion);
+
+                      tasks.Add(Task.Delay(TimeSpan.FromMilliseconds(-1), token));
+
+                      await Task.WhenAny(tasks);
 
                       queue.Complete();
 
-                      token.ThrowIfCancellationRequested();
+                     // token.ThrowIfCancellationRequested();
                 
                   }
                   catch (Exception ex)
@@ -75,6 +88,7 @@ namespace AsyncTimer
 
                 task.ContinueWith((taskResult) => { }, TaskContinuationOptions.OnlyOnFaulted);
 
+
                 task.Wait();
 
             }
@@ -86,8 +100,8 @@ namespace AsyncTimer
 
 
             Console.Write("Press any key to exit... ");
-                Console.ReadKey();
 
+            Console.ReadKey();
         }
 
         private static async Task Produce(BufferBlock<DateTime> queue, DateTime time)
